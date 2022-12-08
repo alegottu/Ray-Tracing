@@ -1,0 +1,134 @@
+#pragma kernel CSMain
+
+static const float PI = 3.14159265f;
+
+RWTexture2D<float4> Result;
+float4x4 CameraToWorld;
+float4x4 InverseProjection;
+Texture2D<float4> Skybox;
+SamplerState sampler_Skybox;
+int PixelSize;
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+struct RayHit
+{
+    float3 position;
+    float3 normal;
+    float distance;
+};
+
+Ray CreateRay(float3 origin, float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+Ray CreateCamRay(float2 uv)
+{
+    float3 origin = mul(CameraToWorld, float4(0, 0, 0, 1)).xyz;
+    float3 direction = mul(InverseProjection, float4(uv, 0, 1)).xyz;
+    direction = mul(CameraToWorld, float4(direction, 0)).xyz;
+    direction = normalize(direction);
+
+    return CreateRay(origin, direction);
+}
+
+RayHit CreateRayHit()
+{
+    RayHit hit;
+    hit.position = float3(0, 0, 0);
+    hit.normal = float3(0, 0, 0);
+    hit.distance = 1.#INF;
+    return hit;
+}
+
+// inout to modify original hit passed in to closest one
+void GetGroundIntersection(Ray ray, inout RayHit closest)
+{
+    float t = -ray.origin.y / (ray.direction.y + 0.1f);
+
+    if (t > 0.0f && t < closest.distance)
+    {
+        closest.position = ray.origin + t * ray.direction;
+        closest.normal = float3(0, 1, 0);
+        closest.distance = t;
+    }
+}
+
+// sphere: xyz = pos, w = radius
+void GetSphereIntersection(Ray ray, inout RayHit closest, float4 sphere)
+{
+    // Calculate distance to where the sphere intersects with the ray
+    float3 d = ray.origin - sphere.xyz;
+    float p1 = -dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.w * sphere.w;
+    
+    // no intersection
+    if (p2sqr < 0)
+    {
+        return;
+    }
+
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+
+    if (t > 0 && t < closest.distance)
+    {
+        closest.position = ray.origin + t * ray.direction;
+        closest.normal = normalize(closest.position - sphere.xyz);
+        closest.distance = t;
+    }
+}
+
+RayHit Trace(Ray ray)
+{
+    RayHit closest = CreateRayHit();
+    GetGroundIntersection(ray, closest);
+    GetSphereIntersection(ray, closest, float4(0, 3, 0, 1));
+    return closest;
+}
+
+float3 Shade(inout Ray ray, RayHit hit)
+{
+    if (hit.distance < 1.#INF)
+    {
+        return float3(1, 0, 0);
+    }
+    else
+    {
+        float theta = acos(ray.direction.y) / -PI;
+        float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+        return Skybox.SampleLevel(sampler_Skybox, float2(phi, theta), 0).xyz; 
+    }
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x % PixelSize == 0 && id.y % PixelSize == 0)
+    {
+        uint width, height;
+        Result.GetDimensions(width, height);
+        float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+        
+        Ray ray = CreateCamRay(uv);
+        RayHit closest = Trace(ray);
+        float3 result = Shade(ray, closest);
+
+        for (int j = 0; j < PixelSize; j++)
+        {
+            for (int k = 0; k < PixelSize; k++)
+            {
+                uint2 xy = uint2(id.x + j, id.y + k);
+                Result[xy] = float4(result, 1);
+            }
+        }
+    }
+}

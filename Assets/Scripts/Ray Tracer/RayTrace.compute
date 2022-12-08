@@ -1,0 +1,180 @@
+#pragma kernel CSMain
+
+static const float PI = 3.14159265f;
+
+RWTexture2D<float4> Result;
+Texture2D<float4> Skybox;
+float4x4 CameraToWorld;
+float4x4 InverseProjection;
+SamplerState sampler_Skybox;
+float4 DirectionalLight;
+float3 DefaultAlbedo;
+float3 DefaultSpecular;
+float2 PixelOffset;
+int ReflectAmount;
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+    float3 energy;
+};
+
+struct RayHit
+{
+    float3 position;
+    float3 normal;
+    float3 albedo;
+    float3 specular;
+    float distance;
+};
+
+struct Sphere
+{
+    float3 position;
+    float3 albedo;
+    float3 specular;
+    float radius;
+};
+
+StructuredBuffer<Sphere> Spheres;
+
+Ray CreateRay(float3 origin, float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    ray.energy = float3(1, 1, 1); // denotes reflection color strength
+    return ray;
+}
+
+Ray CreateCamRay(float2 uv)
+{
+    float3 origin = mul(CameraToWorld, float4(0, 0, 0, 1)).xyz;
+    float3 direction = mul(InverseProjection, float4(uv, 0, 1)).xyz;
+    direction = mul(CameraToWorld, float4(direction, 0)).xyz;
+    direction = normalize(direction);
+
+    return CreateRay(origin, direction);
+}
+
+RayHit CreateRayHit()
+{
+    RayHit hit;
+    hit.position = float3(0, 0, 0);
+    hit.normal = float3(0, 0, 0);
+    hit.distance = 1.#INF;
+    return hit;
+}
+
+// inout to modify original hit passed in to closest one
+void GetGroundIntersection(Ray ray, inout RayHit closest)
+{
+    float t = -ray.origin.y / ray.direction.y;
+
+    if (t > 0 && t < closest.distance)
+    {
+        closest.position = ray.origin + t * ray.direction;
+        closest.normal = float3(0, 1, 0);
+        closest.distance = t;
+        closest.albedo = DefaultAlbedo;
+        closest.specular = DefaultSpecular;
+    }
+}
+
+// sphere: xyz = pos, w = radius
+void GetSphereIntersection(Ray ray, inout RayHit closest, Sphere sphere)
+{
+    // Calculate distance to where the sphere intersects with the ray
+    float3 d = ray.origin - sphere.position;
+    float p1 = -dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
+    
+    // no intersection
+    if (p2sqr < 0)
+    {
+        return;
+    }
+
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+
+    if (t > 0 && t < closest.distance)
+    {
+        closest.position = ray.origin + t * ray.direction;
+        closest.normal = normalize(closest.position - sphere.position);
+        closest.distance = t;
+        closest.albedo = sphere.albedo;
+        closest.specular = sphere.specular;
+    }
+}
+
+RayHit Trace(Ray ray)
+{
+    RayHit closest = CreateRayHit();
+    GetGroundIntersection(ray, closest);
+
+    uint numSpheres, stride;
+    Spheres.GetDimensions(numSpheres, stride);
+
+    for (uint i = 0; i < numSpheres; i++)
+    {
+        GetSphereIntersection(ray, closest, Spheres[i]);
+    }
+
+    return closest;
+}
+
+float3 Shade(inout Ray ray, RayHit hit)
+{
+    if (hit.distance < 1.#INF)
+    {
+        Ray shadowRay = CreateRay(hit.position + hit.normal * 0.001f, -1 * DirectionalLight.xyz);
+        RayHit shadowHit = Trace(shadowRay);
+
+        // if a ray returning to the light from the surface is blocked, draw a shadow
+        if (shadowHit.distance != 1.#INF)
+        {
+            return float3(0, 0, 0);
+        }
+
+        ray.origin = hit.position + hit.normal * 0.001f; // avoid floating point error
+        ray.direction = reflect(ray.direction, hit.normal);
+        ray.energy *= hit.specular;
+
+        return saturate(-dot(hit.normal, DirectionalLight.xyz)) * DirectionalLight.w * hit.albedo;
+    }
+    else
+    {
+        ray.energy = 0.0f; // No hit
+
+        // Sample the skybox;
+        float theta = acos(ray.direction.y) / -PI;
+        float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+        return Skybox.SampleLevel(sampler_Skybox, float2(phi, theta), 0).xyz; 
+    }
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    float2 uv = float2((id.xy + PixelOffset) / float2(width, height) * 2.0f - 1.0f);
+    
+    Ray ray = CreateCamRay(uv);
+    float3 result = float3(0, 0, 0);
+
+    for(int i = 0; i < ReflectAmount; i++)
+    {
+        RayHit hit = Trace(ray);
+        result += ray.energy * Shade(ray, hit); // Shade updates energy
+
+        if (!any(ray.energy))
+        {
+            break;
+        }
+    }
+
+    Result[id.xy] = float4(result, 1);
+}
