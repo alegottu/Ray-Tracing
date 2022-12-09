@@ -1,14 +1,36 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(Camera))]
 public class PixelTraceManager : MonoBehaviour
 {
     [SerializeField] private ComputeShader shader;
+    [SerializeField] private Light dirLight;
+    [SerializeField] private Transform spheres;
+    [SerializeField] private Color defaultAlbedo = Color.white;
+    [SerializeField] private Color defaultSpecular = Color.white;
+    [SerializeField] private int reflectAmount = 2;
     [SerializeField] private int pixelSize = 1;
 
+    private ComputeBuffer sphereBuffer;
     private RenderTexture target = null;
     private Camera cam;
-    private Texture2D skybox;
+
+    private struct Sphere
+    {
+        public Sphere(Vector3 position, Vector3 albedo, Vector3 specular, float radius)
+        {
+            this.position = position;
+            this.albedo = albedo;
+            this.specular = specular;
+            this.radius = radius;
+        }
+
+        Vector3 position;
+        Vector3 albedo;
+        Vector3 specular;
+        float radius;
+    }
 
     private void NewTexture()
     {
@@ -30,18 +52,43 @@ public class PixelTraceManager : MonoBehaviour
         }
     }
 
+    // Gather all the sphere data from the scene
+    private void GetAllSpheres()
+    {
+        List<Sphere> sphereList = new List<Sphere>();
+
+        foreach (Transform child in spheres)
+        {
+            Material material = child.GetComponent<Renderer>().material;
+            Vector3 albedo = (Vector4)material.color;
+            Vector3 specular = material.HasColor("_SpecColor") ? (Vector4)material.GetColor("_SpecColor") : Vector3.zero;
+            float radius = child.GetComponent<SphereCollider>().radius;
+
+            Sphere sphere = new Sphere(child.position, albedo, specular, radius);
+            sphereList.Add(sphere);
+        }
+
+        sphereBuffer = new ComputeBuffer(sphereList.Count, 40); // 40 = 4 bytes per each float * 10 floats in a sphere
+        sphereBuffer.SetData(sphereList);
+    }
+
     private void SetStaticShaderParameters()
     {
-        shader.SetTexture(0, "Skybox", skybox);
+        shader.SetBuffer(0, "Spheres", sphereBuffer);
+        Vector3 light = dirLight.transform.forward;
+        shader.SetVector("DirectionalLight", new Vector4(light.x, light.y, light.z, dirLight.intensity));
+        shader.SetVector("DefaultAlbedo", defaultAlbedo);
+        shader.SetVector("DefaultSpecular", defaultSpecular);
+        shader.SetInt("ReflectAmount", reflectAmount);
         shader.SetInt("PixelSize", pixelSize);
     }
 
     private void Awake()
     {
         cam = GetComponent<Camera>();
-        skybox = Resources.Load("Textures/skybox") as Texture2D;
 
         NewTexture();
+        GetAllSpheres();
         SetStaticShaderParameters();
     }
 

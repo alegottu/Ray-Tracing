@@ -22,6 +22,9 @@
 # Visual Studio cache directory
 .vs/
 
+# Imported models
+BrokenVector/
+
 # Gradle cache directory
 .gradle/
 
