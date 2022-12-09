@@ -1,6 +1,7 @@
 #pragma kernel CSMain
 
 static const float PI = 3.14159265f;
+static const float EPSILON = 1e-8;
 
 RWTexture2D<float4> Result;
 float4x4 CameraToWorld;
@@ -36,7 +37,20 @@ struct Sphere
     float radius;
 };
 
+struct Mesh
+{
+    float4x4 localToWorld;
+    float3 albedo;
+    float3 specular;
+    int indices_offset;
+    int indices_count;
+};
+
 StructuredBuffer<Sphere> Spheres;
+StructuredBuffer<Mesh> Meshes;
+StructuredBuffer<float3> Vertices;
+StructuredBuffer<int> Indices;
+// Create buffer of triangle normals and interpolate across faces to remove shading artifacts
 
 Ray CreateRay(float3 origin, float3 direction)
 {
@@ -108,17 +122,91 @@ void GetSphereIntersection(Ray ray, inout RayHit closest, Sphere sphere)
     }
 }
 
+bool GetTriangleIntersection(Ray ray, float3 vert0, float3 vert1, float3 vert2, inout float t, inout float u, inout float v)
+{
+    // find vectors for two edges sharing vert0
+    float3 edge1 = vert1 - vert0;
+    float3 edge2 = vert2 - vert0;
+    // begin calculating determinant - also used to calculate U parameter
+    float3 pvec = cross(ray.direction, edge2);
+    // if determinant is near zero, ray lies in plane of triangle
+    float det = dot(edge1, pvec);
+
+    // use backface culling
+    if (det < EPSILON)
+    {
+        return false;
+    }
+
+    float inv_det = 1.0f / det;
+    // calculate distance from vert0 to ray origin
+    float3 tvec = ray.origin - vert0;
+    // calculate U parameter and test bounds
+    u = dot(tvec, pvec) * inv_det;
+
+    if (u < 0.0 || u > 1.0f)
+    {
+        return false;
+    }
+
+    // prepare to test V parameter
+    float3 qvec = cross(tvec, edge1);
+    // calculate V parameter and test bounds
+    v = dot(ray.direction, qvec) * inv_det;
+
+    if (v < 0.0 || u + v > 1.0f)
+    {
+        return false;
+    }
+
+    // calculate t, ray intersects triangle
+    t = dot(edge2, qvec) * inv_det;
+    return true;
+}
+
+void GetMeshIntersection(Ray ray, inout RayHit closest, Mesh mesh)
+{
+    uint offset = mesh.indices_offset;
+    uint count = offset + mesh.indices_count;
+
+    for (uint i = offset; i < count; i += 3)
+    {
+        float3 v0 = (mul(mesh.localToWorld, float4(Vertices[Indices[i]], 1))).xyz;
+        float3 v1 = (mul(mesh.localToWorld, float4(Vertices[Indices[i + 1]], 1))).xyz;
+        float3 v2 = (mul(mesh.localToWorld, float4(Vertices[Indices[i + 2]], 1))).xyz;
+        float t, u, v;
+
+        if (GetTriangleIntersection(ray, v0, v1, v2, t, u, v))
+        {
+            if (t > 0 && t < closest.distance)
+            {
+                closest.distance = t;
+                closest.position = float3(u, v, 1 - u - v);
+                closest.normal = normalize(cross(v1 - v0, v2 - v0));
+                closest.albedo = mesh.albedo;
+                closest.specular = mesh.specular;
+            }
+        }
+    }
+}
+
 RayHit Trace(Ray ray)
 {
     RayHit closest = CreateRayHit();
     GetGroundIntersection(ray, closest);
 
-    uint numSpheres, stride;
-    Spheres.GetDimensions(numSpheres, stride);
+    uint count, stride, i;
+    Spheres.GetDimensions(count, stride);
 
-    for (uint i = 0; i < numSpheres; i++)
+    for (i = 0; i < count; i++)
     {
         GetSphereIntersection(ray, closest, Spheres[i]);
+    }
+
+    Meshes.GetDimensions(count, stride);
+    for (i = 0; i < count; i++)
+    {
+        GetMeshIntersection(ray, closest, Meshes[i]);
     }
 
     return closest;
@@ -153,6 +241,7 @@ float3 Shade(inout Ray ray, RayHit hit)
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
+    // Shade groups of pixels at once with the same data
     if (id.x % PixelSize == 0 && id.y % PixelSize == 0)
     {
         uint width, height;
@@ -165,7 +254,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
         for(i = 0; i < ReflectAmount; i++)
         {
-            RayHit hit = Trace(ray);
+            RayHit hit = Trace(ray); // use distance of hit to scale texture mapping
             result += ray.energy * Shade(ray, hit); // Shade updates energy
 
             if (!any(ray.energy))

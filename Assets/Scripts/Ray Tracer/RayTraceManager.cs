@@ -108,7 +108,6 @@ public class RayTraceManager : MonoBehaviour
         List<Mesh> meshes = new List<Mesh>();
         List<Vector3> vertices = new List<Vector3>();
         List<int> indices = new List<int>();
-        currentSample = 0;
 
         foreach (Transform child in objects)
         {
@@ -196,5 +195,14 @@ public class RayTraceManager : MonoBehaviour
             currentSample = 0;
             transform.hasChanged = false;
         }
+    }
+
+    private void OnDestroy()
+    {
+        target.Release();
+        sphereBuffer.Dispose();
+        meshBuffer.Dispose();
+        vertexBuffer.Dispose();
+        indexBuffer.Dispose();
     }
 }
