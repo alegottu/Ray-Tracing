@@ -10,7 +10,7 @@ public class RayTraceManager : ShaderManager
     {
         skybox = Resources.Load("Textures/skybox") as Texture2D;
         ShaderSetup();
-        shader.SetTexture(0, "Skybox", skybox);
+        shader.SetTexture(kernel, "Skybox", skybox);
         AAMaterial = new Material(Shader.Find("Hidden/AntiAlias"));
     }
 

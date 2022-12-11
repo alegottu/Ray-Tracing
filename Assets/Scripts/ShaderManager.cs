@@ -20,6 +20,7 @@ public class ShaderManager : MonoBehaviour
     protected ComputeBuffer indexBuffer;
     protected RenderTexture target = null;
     protected Camera cam;
+    protected int kernel = 0;
 
     protected struct Sphere
     {
@@ -156,14 +157,15 @@ public class ShaderManager : MonoBehaviour
         shader.SetVector("DefaultSpecular", defaultSpecular);
         shader.SetVector("DefaultShadow", defaultShadow);
         shader.SetInt("ReflectAmount", reflectAmount);
-        shader.SetBuffer(0, "Spheres", sphereBuffer);
-        shader.SetBuffer(0, "Meshes", meshBuffer);
-        shader.SetBuffer(0, "Vertices", vertexBuffer);
-        shader.SetBuffer(0, "Indices", indexBuffer);
+        shader.SetBuffer(kernel, "Spheres", sphereBuffer);
+        shader.SetBuffer(kernel, "Meshes", meshBuffer);
+        shader.SetBuffer(kernel, "Vertices", vertexBuffer);
+        shader.SetBuffer(kernel, "Indices", indexBuffer);
     }
 
     protected void ShaderSetup()
     {
+        kernel = shader.FindKernel("CSMain");
         cam = GetComponent<Camera>();
 
         NewTexture();
@@ -181,10 +183,10 @@ public class ShaderManager : MonoBehaviour
     {
         SetDynamicShaderParameters();
 
-        shader.SetTexture(0, "Result", target);
-        int threadGroupsX = Mathf.CeilToInt(Screen.width / 22);
-        int threadGroupsY = Mathf.CeilToInt(Screen.height / 22);
-        shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
+        shader.SetTexture(kernel, "Result", target);
+        int threadGroupsX = Mathf.CeilToInt(Screen.width / 8);
+        int threadGroupsY = Mathf.CeilToInt(Screen.height / 8);
+        shader.Dispatch(kernel, threadGroupsX, threadGroupsY, 1);
     }
 
     private void OnDestroy()
