@@ -565,7 +565,7 @@ MonoBehaviour:
   defaultSpecular: {r: 1, g: 1, b: 1, a: 1}
   defaultShadow: {r: 0, g: 0, b: 0, a: 1}
   reflectAmount: 2
-  pixelSize: 6
+  targetWidth: 320
 --- !u!1 &1219361261
 GameObject:
   m_ObjectHideFlags: 0

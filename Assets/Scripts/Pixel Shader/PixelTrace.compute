@@ -10,9 +10,8 @@ float4 DirectionalLight;
 float3 DefaultAlbedo;
 float3 DefaultSpecular;
 float3 DefaultShadow;
-float2 PixelOffset;
-int PixelSize;
 int ReflectAmount;
+int PixelSize;
 
 struct Ray
 {
