@@ -6,12 +6,13 @@ static const float EPSILON = 1e-8;
 RWTexture2D<float4> Result;
 float4x4 CameraToWorld;
 float4x4 InverseProjection;
-SamplerState sampler_Skybox;
 float4 DirectionalLight;
 float3 DefaultAlbedo;
 float3 DefaultSpecular;
-int ReflectAmount;
+float3 DefaultShadow;
+float2 PixelOffset;
 int PixelSize;
+int ReflectAmount;
 
 struct Ray
 {
@@ -40,8 +41,10 @@ struct Sphere
 struct Mesh
 {
     float4x4 localToWorld;
+    float3 position;
     float3 albedo;
     float3 specular;
+    float radius;
     int indices_offset;
     int indices_count;
 };
@@ -50,7 +53,6 @@ StructuredBuffer<Sphere> Spheres;
 StructuredBuffer<Mesh> Meshes;
 StructuredBuffer<float3> Vertices;
 StructuredBuffer<int> Indices;
-// Create buffer of triangle normals and interpolate across faces to remove shading artifacts
 
 Ray CreateRay(float3 origin, float3 direction)
 {
@@ -122,6 +124,23 @@ void GetSphereIntersection(Ray ray, inout RayHit closest, Sphere sphere)
     }
 }
 
+bool TestSphereIntersection(Ray ray, RayHit closest, float3 position, float radius)
+{
+    float3 d = ray.origin - position;
+    float p1 = -dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + radius * radius;
+    
+    if (p2sqr < 0)
+    {
+        return false;
+    }
+
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+
+    return t > 0 && t < closest.distance;
+}
+
 bool GetTriangleIntersection(Ray ray, float3 vert0, float3 vert1, float3 vert2, inout float t, inout float u, inout float v)
 {
     // find vectors for two edges sharing vert0
@@ -166,6 +185,12 @@ bool GetTriangleIntersection(Ray ray, float3 vert0, float3 vert1, float3 vert2, 
 
 void GetMeshIntersection(Ray ray, inout RayHit closest, Mesh mesh)
 {
+    // Ray not in bounding sphere
+    if (!TestSphereIntersection(ray, closest, mesh.position, mesh.radius))
+    {
+        return;
+    }
+
     uint offset = mesh.indices_offset;
     uint count = offset + mesh.indices_count;
 
@@ -176,6 +201,7 @@ void GetMeshIntersection(Ray ray, inout RayHit closest, Mesh mesh)
         float3 v2 = (mul(mesh.localToWorld, float4(Vertices[Indices[i + 2]], 1))).xyz;
         float t, u, v;
 
+        // use previous texture sample depending on t
         if (GetTriangleIntersection(ray, v0, v1, v2, t, u, v))
         {
             if (t > 0 && t < closest.distance)
@@ -222,7 +248,7 @@ float3 Shade(inout Ray ray, RayHit hit)
         // if a ray returning to the light from the surface is blocked, draw a shadow
         if (shadowHit.distance != 1.#INF)
         {
-            return float3(0, 0, 0);
+            return DefaultShadow;
         }
 
         ray.origin = hit.position + hit.normal * 0.001f; // avoid floating point error
@@ -238,7 +264,7 @@ float3 Shade(inout Ray ray, RayHit hit)
     }
 }
 
-[numthreads(8,8,1)]
+[numthreads(22, 22, 1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     // Shade groups of pixels at once with the same data
